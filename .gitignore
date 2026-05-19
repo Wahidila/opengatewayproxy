@@ -3,6 +3,9 @@ config.json
 *.pid
 *.log
 *.err
+cookies.txt
+.deploy.sh
+.cleanup.mjs
 
 # Tooling
 .playwright-mcp/
