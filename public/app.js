@@ -86,6 +86,7 @@ async function refresh() {
   $("c-err-sub").textContent = `${s.totalErrors} errors / ${s.totalRequests} req`;
 
   renderKeys(s.keys);
+  renderClientKeys(s.clientKeys, s.proxyLocked);
   refreshLog();
 }
 
@@ -128,6 +129,97 @@ function renderKeys(keys) {
       </tr>
     `;
   }).join("");
+}
+
+// ============================================================================
+// CLIENT KEYS
+// ============================================================================
+
+function renderClientKeys(keys, locked) {
+  const tbody = $("client-keys-tbody");
+  const status = $("proxy-status");
+  if (!keys || keys.length === 0) {
+    status.className = "status-pill status-cooldown";
+    status.textContent = "OPEN RELAY";
+    tbody.innerHTML = `<tr><td colspan="6" class="empty"><strong style="color:var(--warn)">⚠ /v1/* is OPEN.</strong> Anyone with the URL can use your upstream keys. Generate a key to lock it.</td></tr>`;
+    return;
+  }
+  status.className = "status-pill status-healthy";
+  status.textContent = `LOCKED (${keys.length})`;
+  tbody.innerHTML = keys.map(c => {
+    const dotClass = c.enabled ? "dot-running" : "dot-dead";
+    const pillClass = c.enabled ? "status-healthy" : "status-disabled";
+    return `
+      <tr>
+        <td><span class="dot ${dotClass}"></span></td>
+        <td>
+          <div class="key-mono">${escapeHtml(c.masked)}</div>
+          ${c.label ? `<div class="label-text">${escapeHtml(c.label)}</div>` : ""}
+        </td>
+        <td class="num">${c.requests}</td>
+        <td class="num">${fmtRelative(c.lastUsedAt)}</td>
+        <td><span class="status-pill ${pillClass}">${c.enabled ? "active" : "disabled"}</span></td>
+        <td class="actions">
+          <button class="btn-icon" title="${c.enabled ? "Disable" : "Enable"}" onclick="toggleClientKey('${c.id}', ${!c.enabled})">${c.enabled ? "⏸" : "▶"}</button>
+          <button class="btn-icon btn-danger" title="Delete" onclick="deleteClientKey('${c.id}')">×</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function openClientKeyModal() {
+  $("ck-label").value = "";
+  $("ck-result").className = "test-result";
+  $("ck-result").textContent = "";
+  $("ck-stage-input").hidden = false;
+  $("ck-stage-result").hidden = true;
+  $("ck-create-btn").textContent = "Generate";
+  $("ck-create-btn").disabled = false;
+  $("ck-create-btn").style.display = "";
+  $("client-key-modal").hidden = false;
+  $("ck-label").focus();
+}
+function closeClientKeyModal() { $("client-key-modal").hidden = true; refresh(); }
+
+async function generateClientKey() {
+  const label = $("ck-label").value.trim();
+  $("ck-create-btn").disabled = true;
+  const r = await fetch("/admin/client-keys", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    $("ck-result").className = "test-result error";
+    $("ck-result").textContent = err.error || `HTTP ${r.status}`;
+    $("ck-create-btn").disabled = false;
+    return;
+  }
+  const { key } = await r.json();
+  $("ck-stage-input").hidden = true;
+  $("ck-stage-result").hidden = false;
+  $("ck-new-key").value = key.fullKey;
+  $("ck-curl-example").textContent =
+    `curl ${location.origin}/v1/chat/completions \\
+  -H "authorization: Bearer ${key.fullKey}" \\
+  -H "content-type: application/json" \\
+  -d '{"model":"mimo-v2.5-pro","messages":[{"role":"user","content":"hi"}]}'`;
+  $("ck-create-btn").style.display = "none";
+}
+
+async function toggleClientKey(id, enabled) {
+  await api(`/admin/client-keys/${id}`, {
+    method: "PATCH", body: JSON.stringify({ enabled }),
+  });
+  refresh();
+}
+
+async function deleteClientKey(id) {
+  if (!confirm("Delete this client API key? Existing apps using it will break.")) return;
+  await api(`/admin/client-keys/${id}`, { method: "DELETE" });
+  refresh();
 }
 
 // ============================================================================

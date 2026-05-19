@@ -73,6 +73,35 @@
       </div>
     </section>
 
+    <!-- CLIENT KEYS PANEL (controls /v1/* access) -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>
+          Client API Keys
+          <span class="muted">(for /v1/* access)</span>
+          <span id="proxy-status" class="status-pill" style="margin-left: 8px;"></span>
+        </h2>
+        <button class="btn btn-primary" onclick="openClientKeyModal()">+ Generate Key</button>
+      </div>
+      <div class="table-wrap">
+        <table class="keys-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Label / Key</th>
+              <th>Requests</th>
+              <th>Last Used</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="client-keys-tbody">
+            <tr><td colspan="6" class="empty">No client keys. <strong>/v1/* is OPEN — anyone can use this proxy.</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- TWO COLUMN: LOG + MODELS -->
     <section class="two-col">
       <div class="panel">
@@ -129,6 +158,38 @@
         <button class="btn btn-ghost" onclick="closeAddModal()">Cancel</button>
         <button class="btn" onclick="testNewKey()">Test Connection</button>
         <button class="btn btn-primary" onclick="saveNewKey()">Save</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- GENERATE CLIENT KEY MODAL -->
+  <div class="modal" id="client-key-modal" hidden>
+    <div class="modal-card">
+      <header>
+        <h3>Generate Client API Key</h3>
+        <button class="btn-close" onclick="closeClientKeyModal()">&times;</button>
+      </header>
+      <div class="modal-body" id="ck-stage-input">
+        <p class="muted small" style="margin: 0 0 8px;">
+          A new random key (<code>sk-ogw-...</code>) will be generated. Clients pass it as
+          <code>Authorization: Bearer &lt;key&gt;</code> to <code>/v1/*</code>.
+        </p>
+        <label>Label <span class="muted small">(optional, e.g. "my-app")</span></label>
+        <input type="text" id="ck-label" placeholder="my-app">
+        <div id="ck-result" class="test-result"></div>
+      </div>
+      <div class="modal-body" id="ck-stage-result" hidden>
+        <p class="muted small" style="margin: 0 0 8px;">
+          ⚠ <strong>Copy this key now.</strong> It will be hidden after you close this dialog.
+        </p>
+        <label>New API Key</label>
+        <textarea id="ck-new-key" rows="3" readonly style="cursor: pointer;" onclick="this.select(); document.execCommand('copy');"></textarea>
+        <p class="muted small">Click the textarea to copy.</p>
+        <pre id="ck-curl-example" class="curl-block"></pre>
+      </div>
+      <footer>
+        <button class="btn btn-ghost" onclick="closeClientKeyModal()">Cancel</button>
+        <button class="btn btn-primary" id="ck-create-btn" onclick="generateClientKey()">Generate</button>
       </footer>
     </div>
   </div>

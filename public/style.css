@@ -179,6 +179,30 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .status-cooldown { background: rgba(255,197,61,0.15); color: var(--warn); }
 .status-disabled { background: rgba(138,147,163,0.15); color: var(--muted); }
 
+.curl-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0 0;
+  color: var(--accent);
+}
+
+.modal-body code {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
 /* TWO COLUMN */
 .two-col {
   display: grid;

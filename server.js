@@ -52,12 +52,18 @@ const state = {
   totalRequests: 0,
   totalErrors: 0,
   totalLatencyMs: 0,
-  /** @type {Array<{ts:number,keyId:string,model:string,status:number,latencyMs:number,promptTokens:number,completionTokens:number,stream:boolean,path:string,error?:string}>} */
+  /** @type {Array<{ts:number,keyId:string,model:string,status:number,latencyMs:number,promptTokens:number,completionTokens:number,stream:boolean,path:string,error?:string,clientKeyId?:string}>} */
   log: [],
   /** SHA-256 hex of dashboard password. Empty string disables auth. */
   passwordHash: "",
   /** HMAC secret for session cookies. Auto-generated. */
   sessionSecret: "",
+  /**
+   * Client API keys for authenticating /v1/* requests.
+   * Empty array = open relay (backward compat).
+   * @type {Array<{id:string,key:string,label:string,enabled:boolean,requests:number,lastUsedAt:number,createdAt:number}>}
+   */
+  clientKeys: [],
 };
 
 // ============================================================================
@@ -87,6 +93,20 @@ async function loadConfig() {
     }
     state.passwordHash = parsed.passwordHash || "";
     state.sessionSecret = parsed.sessionSecret || crypto.randomBytes(32).toString("hex");
+    state.clientKeys = Array.isArray(parsed.clientKeys) ? parsed.clientKeys.map(c => ({
+      id: c.id || shortId(),
+      key: c.key,
+      label: c.label || "",
+      enabled: c.enabled !== false,
+      requests: c.requests || 0,
+      lastUsedAt: c.lastUsedAt || 0,
+      createdAt: c.createdAt || Date.now(),
+    })) : [];
+    if (state.clientKeys.length > 0) {
+      console.log(`[config] loaded ${state.clientKeys.length} client API key(s) (proxy access locked)`);
+    } else {
+      console.log(`[config] no client keys — /v1/* is OPEN RELAY`);
+    }
   } catch {
     console.log(`[config] no existing config, starting fresh`);
     state.sessionSecret = crypto.randomBytes(32).toString("hex");
@@ -119,6 +139,15 @@ async function saveConfig() {
       totalLatencyMs: k.totalLatencyMs,
       lastUsedAt: k.lastUsedAt,
       addedAt: k.addedAt,
+    })),
+    clientKeys: state.clientKeys.map(c => ({
+      id: c.id,
+      key: c.key,
+      label: c.label,
+      enabled: c.enabled,
+      requests: c.requests,
+      lastUsedAt: c.lastUsedAt,
+      createdAt: c.createdAt,
     })),
   };
   try {
@@ -257,6 +286,36 @@ function pushLog(entry) {
 // ============================================================================
 
 async function proxyRequest(req, res, body) {
+  // ---- Client API key authentication ----
+  // If clientKeys is non-empty, require Bearer auth from the caller.
+  if (state.clientKeys.length > 0) {
+    const authHeader = (req.headers["authorization"] || "").trim();
+    const m = /^Bearer\s+(.+)$/i.exec(authHeader);
+    const presentedKey = m ? m[1].trim() : "";
+    const clientKey = state.clientKeys.find(c => c.enabled && c.key === presentedKey);
+    if (!clientKey) {
+      respondJson(res, 401, {
+        error: {
+          message: "Invalid or missing client API key. Pass it as 'Authorization: Bearer <key>'.",
+          type: "invalid_client_key",
+          code: "unauthorized",
+        },
+      });
+      pushLog({
+        ts: nowMs(), keyId: "-", model: extractModel(body), status: 401,
+        latencyMs: 0, promptTokens: 0, completionTokens: 0,
+        stream: body && /\"stream\"\s*:\s*true/.test(body),
+        path: req.url, error: "client auth failed",
+      });
+      return;
+    }
+    // Track usage on the matched client key
+    clientKey.requests++;
+    clientKey.lastUsedAt = nowMs();
+    req._clientKeyId = clientKey.id;
+    saveConfigDebounced();
+  }
+
   const upstreamPath = req.url.replace(/^\/v1/, "/v1");
   const isStream = body && /\"stream\"\s*:\s*true/.test(body);
 
@@ -378,6 +437,7 @@ async function proxyRequest(req, res, body) {
         promptTokens, completionTokens,
         stream: isStream, path: req.url,
         error: isError ? `HTTP ${upstreamRes.status}` : undefined,
+        clientKeyId: req._clientKeyId,
       });
 
       saveConfigDebounced();
@@ -559,6 +619,16 @@ async function handleAdmin(req, res, urlPath, body) {
       keys: state.keys.map(sanitizeKey),
       keyCount: state.keys.length,
       healthyKeyCount: healthy,
+      clientKeys: state.clientKeys.map(c => ({
+        id: c.id,
+        label: c.label,
+        masked: maskKey(c.key),
+        enabled: c.enabled,
+        requests: c.requests,
+        lastUsedAt: c.lastUsedAt,
+        createdAt: c.createdAt,
+      })),
+      proxyLocked: state.clientKeys.length > 0,
     });
   }
 
@@ -637,6 +707,66 @@ async function handleAdmin(req, res, urlPath, body) {
     const idx = state.keys.findIndex(x => x.id === patchMatch[1]);
     if (idx === -1) return respondJson(res, 404, { error: "Key not found" });
     state.keys.splice(idx, 1);
+    saveConfigDebounced();
+    return respondJson(res, 200, { ok: true });
+  }
+
+  // ----- Client API keys (for /v1/* access control) -----
+
+  // GET /admin/client-keys
+  if (req.method === "GET" && urlPath === "/admin/client-keys") {
+    return respondJson(res, 200, {
+      proxyLocked: state.clientKeys.length > 0,
+      keys: state.clientKeys.map(c => ({
+        id: c.id, label: c.label, masked: maskKey(c.key),
+        enabled: c.enabled, requests: c.requests,
+        lastUsedAt: c.lastUsedAt, createdAt: c.createdAt,
+      })),
+    });
+  }
+
+  // POST /admin/client-keys - generate a new client key
+  if (req.method === "POST" && urlPath === "/admin/client-keys") {
+    let parsed;
+    try { parsed = JSON.parse(body || "{}"); } catch { return respondJson(res, 400, { error: "Invalid JSON" }); }
+    const label = (parsed.label || "").trim();
+    // Generate a strong random key, prefixed for clarity (sk-ogw-<48 hex chars>)
+    const newKey = "sk-ogw-" + crypto.randomBytes(24).toString("hex");
+    const entry = {
+      id: shortId(), key: newKey, label, enabled: true,
+      requests: 0, lastUsedAt: 0, createdAt: nowMs(),
+    };
+    state.clientKeys.push(entry);
+    saveConfigDebounced();
+    // Return FULL key once so dashboard can display it. After this it is masked.
+    return respondJson(res, 201, {
+      ok: true,
+      key: {
+        id: entry.id, label: entry.label, fullKey: newKey,
+        masked: maskKey(newKey), enabled: true,
+        requests: 0, lastUsedAt: 0, createdAt: entry.createdAt,
+      },
+    });
+  }
+
+  // PATCH /admin/client-keys/:id - enable/disable/relabel
+  const ckPatch = urlPath.match(/^\/admin\/client-keys\/([a-f0-9]+)$/);
+  if (req.method === "PATCH" && ckPatch) {
+    const c = state.clientKeys.find(x => x.id === ckPatch[1]);
+    if (!c) return respondJson(res, 404, { error: "Client key not found" });
+    let parsed;
+    try { parsed = JSON.parse(body || "{}"); } catch { return respondJson(res, 400, { error: "Invalid JSON" }); }
+    if (typeof parsed.enabled === "boolean") c.enabled = parsed.enabled;
+    if (typeof parsed.label === "string") c.label = parsed.label;
+    saveConfigDebounced();
+    return respondJson(res, 200, { ok: true });
+  }
+
+  // DELETE /admin/client-keys/:id
+  if (req.method === "DELETE" && ckPatch) {
+    const idx = state.clientKeys.findIndex(x => x.id === ckPatch[1]);
+    if (idx === -1) return respondJson(res, 404, { error: "Client key not found" });
+    state.clientKeys.splice(idx, 1);
     saveConfigDebounced();
     return respondJson(res, 200, { ok: true });
   }
