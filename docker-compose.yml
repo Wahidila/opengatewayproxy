@@ -1,0 +1,20 @@
+services:
+  proxy:
+    build: .
+    image: opengateway-proxy:latest
+    container_name: opengateway-proxy
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./config.json:/app/config.json
+    environment:
+      PORT: 8787
+      HOST: 0.0.0.0
+      # DASHBOARD_PASSWORD: set this to bootstrap password without browser setup
+      # ADMIN_TOKEN: set this for API automation bypass
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
