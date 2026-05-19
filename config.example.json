@@ -1,0 +1,17 @@
+{
+  "passwordHash": "",
+  "sessionSecret": "",
+  "keys": [
+    {
+      "id": "example1",
+      "key": "ogw_live_PUT_YOUR_KEY_HERE",
+      "label": "account-1",
+      "enabled": true,
+      "requests": 0,
+      "errors": 0,
+      "totalLatencyMs": 0,
+      "lastUsedAt": 0,
+      "addedAt": 0
+    }
+  ]
+}

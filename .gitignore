@@ -1,0 +1,15 @@
+# Secrets / runtime state — NEVER commit
+config.json
+*.pid
+*.log
+*.err
+
+# Tooling
+.playwright-mcp/
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

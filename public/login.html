@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Login - OpenGateway Proxy</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .login-card {
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      width: 380px;
+      max-width: calc(100vw - 32px);
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    .login-brand {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 24px;
+    }
+    .login-brand strong { font-size: 16px; }
+    .login-card h1 {
+      font-size: 20px;
+      margin: 0 0 6px;
+      font-weight: 600;
+    }
+    .login-card .sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 22px;
+    }
+    .login-form {
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .login-form label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .login-form input[type=password] {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 11px 14px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: var(--mono);
+      width: 100%;
+    }
+    .login-form input[type=password]:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(0,210,106,0.15);
+    }
+    .login-form button {
+      background: var(--accent);
+      color: #0a1410;
+      border: none;
+      padding: 11px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      margin-top: 4px;
+    }
+    .login-form button:hover { background: #00b85b; }
+    .login-form button:disabled { opacity: 0.5; cursor: wait; }
+    .login-msg {
+      font-size: 12px;
+      padding: 8px 10px;
+      border-radius: 5px;
+      min-height: 20px;
+      font-family: var(--mono);
+    }
+    .login-msg.error { background: rgba(255,77,79,0.15); color: var(--error); }
+    .login-msg.success { background: rgba(0,210,106,0.15); color: var(--accent); }
+    .login-msg.info { background: rgba(91,158,255,0.10); color: var(--info); }
+    .footer-note {
+      margin-top: 18px;
+      font-size: 11px;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="dot dot-running"></span>
+      <strong>OpenGateway Proxy</strong>
+    </div>
+    <h1 id="title">Sign in</h1>
+    <p class="sub" id="subtitle">Enter your dashboard password to continue.</p>
+
+    <form class="login-form" id="login-form" autocomplete="off">
+      <label for="pw" id="pw-label">Password</label>
+      <input type="password" id="pw" autocomplete="current-password" required>
+      <div class="login-msg" id="msg"></div>
+      <button type="submit" id="submit-btn">Sign in</button>
+    </form>
+
+    <div class="footer-note" id="footer">Session lasts 7 days. HttpOnly cookie.</div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const msg = (kind, text) => {
+      const el = $("msg");
+      el.className = "login-msg " + (kind || "");
+      el.textContent = text;
+    };
+
+    let mode = "login"; // "setup" or "login"
+
+    async function init() {
+      try {
+        const r = await fetch("/admin/auth/status");
+        const s = await r.json();
+        if (s.authenticated) {
+          location.href = "/";
+          return;
+        }
+        if (!s.passwordSet) {
+          mode = "setup";
+          $("title").textContent = "Set Dashboard Password";
+          $("subtitle").textContent = "First-time setup. Pick a password to protect the dashboard.";
+          $("pw-label").textContent = "New Password (min 6 chars)";
+          $("submit-btn").textContent = "Set password";
+          $("pw").autocomplete = "new-password";
+          msg("info", "First-time setup mode.");
+        }
+      } catch {
+        msg("error", "Cannot reach server. Is it running?");
+      }
+    }
+
+    $("login-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const pw = $("pw").value;
+      if (mode === "setup" && pw.length < 6) {
+        return msg("error", "Password must be at least 6 characters.");
+      }
+      $("submit-btn").disabled = true;
+      msg("", "");
+      try {
+        const endpoint = mode === "setup" ? "/admin/auth/setup" : "/admin/auth/login";
+        const r = await fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ password: pw }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          msg("error", data.error || `HTTP ${r.status}`);
+          $("submit-btn").disabled = false;
+          $("pw").focus();
+          $("pw").select();
+          return;
+        }
+        msg("success", mode === "setup" ? "Password set. Redirecting…" : "Signed in. Redirecting…");
+        setTimeout(() => location.href = "/", 400);
+      } catch (err) {
+        msg("error", String(err.message || err));
+        $("submit-btn").disabled = false;
+      }
+    });
+
+    init();
+    $("pw").focus();
+  </script>
+</body>
+</html>
