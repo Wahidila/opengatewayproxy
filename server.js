@@ -560,28 +560,23 @@ function normalizeRequestBody(body) {
 
         // Handle assistant messages with tool_calls
         if (msg.role === "assistant" && msg.tool_calls && Array.isArray(msg.tool_calls)) {
-          // Convert tool_calls to text description
-          const callDescs = msg.tool_calls.map(tc => {
-            const fn = tc.function || {};
-            return `[Calling tool: ${fn.name || "unknown"}(${(fn.arguments || "").slice(0, 500)})]`;
-          }).join("\n");
-          const textContent = (msg.content || "") + (msg.content ? "\n" : "") + callDescs;
-          normalized.push({ role: "assistant", content: textContent });
+          // Keep content if exists, otherwise describe what assistant did
+          const existingContent = msg.content || "";
+          normalized.push({ role: "assistant", content: existingContent || "I will use a tool to help with this." });
           continue;
         }
 
         // Handle assistant messages with function_call (legacy)
         if (msg.role === "assistant" && msg.function_call) {
-          const fc = msg.function_call;
-          const textContent = (msg.content || "") + `\n[Calling function: ${fc.name || "unknown"}(${(fc.arguments || "").slice(0, 500)})]`;
-          normalized.push({ role: "assistant", content: textContent.trim() });
+          const existingContent = msg.content || "";
+          normalized.push({ role: "assistant", content: existingContent || "I will use a function to help." });
           continue;
         }
 
-        // Handle role="tool" → convert to role="user"
+        // Handle role="tool" → convert to role="user" with natural format
         if (msg.role === "tool") {
           const toolName = msg.name || msg.tool_call_id || "tool";
-          const content = `[Tool Result: ${toolName}]\n${msg.content || ""}`;
+          const content = `[Tool executed: ${toolName}]\nOutput:\n${msg.content || "(no output)"}`;
           // Merge consecutive tool results into one user message
           const prev = normalized[normalized.length - 1];
           if (prev && prev.role === "user" && prev._isTool) {
@@ -594,7 +589,7 @@ function normalizeRequestBody(body) {
 
         // Handle role="function" (legacy) → convert to role="user"
         if (msg.role === "function") {
-          const content = `[Function Result: ${msg.name || "function"}]\n${msg.content || ""}`;
+          const content = `[Tool executed: ${msg.name || "function"}]\nOutput:\n${msg.content || "(no output)"}`;
           normalized.push({ role: "user", content, _isTool: true });
           continue;
         }
