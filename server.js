@@ -316,6 +316,13 @@ async function proxyRequest(req, res, body) {
     saveConfigDebounced();
   }
 
+  // ---- Normalize request body ----
+  // Fix case-sensitive model names (upstream requires lowercase)
+  // Strip/fix params that cause "Param Incorrect" on upstream
+  if (body) {
+    body = normalizeRequestBody(body);
+  }
+
   const upstreamPath = req.url.replace(/^\/v1/, "/v1");
   const isStream = body && /\"stream\"\s*:\s*true/.test(body);
 
@@ -500,6 +507,89 @@ function extractModel(body) {
   if (!body) return "";
   const m = body.match(/"model"\s*:\s*"([^"]+)"/);
   return m ? m[1] : "";
+}
+
+// ============================================================================
+// REQUEST NORMALIZATION (fix upstream "Param Incorrect" errors)
+// ============================================================================
+
+/** Model name aliases → canonical lowercase names upstream accepts */
+const MODEL_ALIASES = {
+  "mimo-v2.5-pro": "mimo-v2.5-pro",
+  "mimo-v2.5": "mimo-v2.5",
+  "mimo-v2-pro": "mimo-v2-pro",
+  "mimo-v2-flash": "mimo-v2-flash",
+  "mimo-v2-omni": "mimo-v2-omni",
+  // Common case variants people/IDEs might use
+  "mimo-v2.5-pro": "mimo-v2.5-pro",
+  "mimov2.5pro": "mimo-v2.5-pro",
+  "mimo": "mimo-v2.5-pro",
+};
+
+function normalizeRequestBody(body) {
+  try {
+    const obj = JSON.parse(body);
+
+    // 1. Normalize model name to lowercase
+    if (obj.model && typeof obj.model === "string") {
+      const lower = obj.model.toLowerCase();
+      // Check alias map first, fallback to lowercased version
+      obj.model = MODEL_ALIASES[lower] || lower;
+    }
+
+    // 2. Fix empty messages array (some IDEs send [])
+    if (Array.isArray(obj.messages) && obj.messages.length === 0) {
+      obj.messages = [{ role: "user", content: "" }];
+    }
+
+    // 3. Ensure messages have content field
+    if (Array.isArray(obj.messages)) {
+      for (const msg of obj.messages) {
+        if (msg && !("content" in msg)) {
+          msg.content = "";
+        }
+        // Fix role "human" → "user" (Anthropic-style)
+        if (msg && msg.role === "human") msg.role = "user";
+        if (msg && msg.role === "ai") msg.role = "assistant";
+      }
+    }
+
+    // 4. Clamp temperature to valid range [0, 2]
+    if (typeof obj.temperature === "number") {
+      obj.temperature = Math.max(0, Math.min(2, obj.temperature));
+    }
+
+    // 5. Fix max_tokens: must be > 0, cap at reasonable limit
+    if ("max_tokens" in obj) {
+      if (typeof obj.max_tokens !== "number" || obj.max_tokens <= 0) {
+        delete obj.max_tokens;
+      } else if (obj.max_tokens > 128000) {
+        obj.max_tokens = 128000;
+      }
+    }
+    // Also handle max_completion_tokens (OpenAI newer format)
+    if ("max_completion_tokens" in obj && !("max_tokens" in obj)) {
+      obj.max_tokens = obj.max_completion_tokens;
+      delete obj.max_completion_tokens;
+      if (typeof obj.max_tokens !== "number" || obj.max_tokens <= 0) {
+        delete obj.max_tokens;
+      }
+    }
+
+    // 6. Remove params that upstream doesn't understand (causes silent errors)
+    const STRIP_PARAMS = [
+      "logit_bias", "top_logprobs",
+      "service_tier", "store", "metadata",
+    ];
+    for (const p of STRIP_PARAMS) {
+      delete obj[p];
+    }
+
+    return JSON.stringify(obj);
+  } catch {
+    // If JSON parse fails, return as-is (will error at upstream anyway)
+    return body;
+  }
 }
 
 // ============================================================================
