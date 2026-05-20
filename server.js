@@ -537,25 +537,91 @@ function normalizeRequestBody(body) {
     // 1. Normalize model name to lowercase
     if (obj.model && typeof obj.model === "string") {
       const lower = obj.model.toLowerCase();
-      // Check alias map first, fallback to lowercased version
       obj.model = MODEL_ALIASES[lower] || lower;
     }
 
-    // 2. Fix empty messages array (some IDEs send [])
+    // 2. Fix empty messages array
     if (Array.isArray(obj.messages) && obj.messages.length === 0) {
       obj.messages = [{ role: "user", content: "" }];
     }
 
-    // 3. Ensure messages have content field
+    // 3. Transform messages for MiMo compatibility
+    // MiMo does NOT support: role="tool", assistant.tool_calls, role="function"
+    // Strategy: convert tool-call flows into plain text equivalents
     if (Array.isArray(obj.messages)) {
-      for (const msg of obj.messages) {
-        if (msg && !("content" in msg)) {
+      const normalized = [];
+      for (let i = 0; i < obj.messages.length; i++) {
+        const msg = obj.messages[i];
+        if (!msg) continue;
+
+        // Fix role aliases
+        if (msg.role === "human") msg.role = "user";
+        if (msg.role === "ai") msg.role = "assistant";
+
+        // Handle assistant messages with tool_calls
+        if (msg.role === "assistant" && msg.tool_calls && Array.isArray(msg.tool_calls)) {
+          // Convert tool_calls to text description
+          const callDescs = msg.tool_calls.map(tc => {
+            const fn = tc.function || {};
+            return `[Calling tool: ${fn.name || "unknown"}(${(fn.arguments || "").slice(0, 500)})]`;
+          }).join("\n");
+          const textContent = (msg.content || "") + (msg.content ? "\n" : "") + callDescs;
+          normalized.push({ role: "assistant", content: textContent });
+          continue;
+        }
+
+        // Handle assistant messages with function_call (legacy)
+        if (msg.role === "assistant" && msg.function_call) {
+          const fc = msg.function_call;
+          const textContent = (msg.content || "") + `\n[Calling function: ${fc.name || "unknown"}(${(fc.arguments || "").slice(0, 500)})]`;
+          normalized.push({ role: "assistant", content: textContent.trim() });
+          continue;
+        }
+
+        // Handle role="tool" → convert to role="user"
+        if (msg.role === "tool") {
+          const toolName = msg.name || msg.tool_call_id || "tool";
+          const content = `[Tool Result: ${toolName}]\n${msg.content || ""}`;
+          // Merge consecutive tool results into one user message
+          const prev = normalized[normalized.length - 1];
+          if (prev && prev.role === "user" && prev._isTool) {
+            prev.content += "\n\n" + content;
+          } else {
+            normalized.push({ role: "user", content, _isTool: true });
+          }
+          continue;
+        }
+
+        // Handle role="function" (legacy) → convert to role="user"
+        if (msg.role === "function") {
+          const content = `[Function Result: ${msg.name || "function"}]\n${msg.content || ""}`;
+          normalized.push({ role: "user", content, _isTool: true });
+          continue;
+        }
+
+        // Ensure content field exists
+        if (!("content" in msg) || msg.content === null) {
           msg.content = "";
         }
-        // Fix role "human" → "user" (Anthropic-style)
-        if (msg && msg.role === "human") msg.role = "user";
-        if (msg && msg.role === "ai") msg.role = "assistant";
+
+        // Normal message — pass through
+        normalized.push({ role: msg.role, content: msg.content });
       }
+
+      // Clean up internal markers and fix consecutive same-role messages
+      // MiMo may also reject consecutive user/user or assistant/assistant
+      const final = [];
+      for (const msg of normalized) {
+        delete msg._isTool;
+        const prev = final[final.length - 1];
+        if (prev && prev.role === msg.role) {
+          // Merge consecutive same-role messages
+          prev.content += "\n\n" + msg.content;
+        } else {
+          final.push(msg);
+        }
+      }
+      obj.messages = final;
     }
 
     // 4. Clamp temperature to valid range [0, 2]
@@ -571,7 +637,6 @@ function normalizeRequestBody(body) {
         obj.max_tokens = 128000;
       }
     }
-    // Also handle max_completion_tokens (OpenAI newer format)
     if ("max_completion_tokens" in obj && !("max_tokens" in obj)) {
       obj.max_tokens = obj.max_completion_tokens;
       delete obj.max_completion_tokens;
@@ -580,7 +645,7 @@ function normalizeRequestBody(body) {
       }
     }
 
-    // 6. Remove params that upstream doesn't understand (causes silent errors)
+    // 6. Remove params that upstream doesn't understand
     const STRIP_PARAMS = [
       "logit_bias", "top_logprobs",
       "service_tier", "store", "metadata",
@@ -591,7 +656,6 @@ function normalizeRequestBody(body) {
 
     return JSON.stringify(obj);
   } catch {
-    // If JSON parse fails, return as-is (will error at upstream anyway)
     return body;
   }
 }
