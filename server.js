@@ -560,16 +560,26 @@ function normalizeRequestBody(body) {
 
         // Handle assistant messages with tool_calls
         if (msg.role === "assistant" && msg.tool_calls && Array.isArray(msg.tool_calls)) {
-          // Keep content if exists, otherwise describe what assistant did
+          // Preserve what tools were called so model has context for the results
+          const callDescs = msg.tool_calls.map(tc => {
+            const fn = tc.function || {};
+            const args = (fn.arguments || "").slice(0, 300);
+            return `${fn.name || "tool"}(${args})`;
+          }).join(", ");
           const existingContent = msg.content || "";
-          normalized.push({ role: "assistant", content: existingContent || "I will use a tool to help with this." });
+          const toolInfo = `[Calling tool: ${callDescs}]`;
+          const content = existingContent ? `${existingContent}\n${toolInfo}` : toolInfo;
+          normalized.push({ role: "assistant", content });
           continue;
         }
 
         // Handle assistant messages with function_call (legacy)
         if (msg.role === "assistant" && msg.function_call) {
+          const fc = msg.function_call;
           const existingContent = msg.content || "";
-          normalized.push({ role: "assistant", content: existingContent || "I will use a function to help." });
+          const toolInfo = `[Calling function: ${fc.name || "function"}(${(fc.arguments || "").slice(0, 300)})]`;
+          const content = existingContent ? `${existingContent}\n${toolInfo}` : toolInfo;
+          normalized.push({ role: "assistant", content });
           continue;
         }
 
