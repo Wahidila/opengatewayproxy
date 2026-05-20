@@ -320,6 +320,10 @@ async function proxyRequest(req, res, body) {
   // Fix case-sensitive model names (upstream requires lowercase)
   // Strip/fix params that cause "Param Incorrect" on upstream
   if (body) {
+    // Debug: save last request body to /tmp for inspection (remove in production)
+    import("node:fs").then(fs => {
+      try { fs.writeFileSync("/tmp/last-request.json", body); } catch {}
+    }).catch(() => {});
     body = normalizeRequestBody(body);
   }
 
